@@ -1,0 +1,9 @@
+{
+	"authors": [
+		"Hiroki Noda"
+	],
+	"copyright": "Copyright © 2019, Hiroki Noda",
+	"description": "Faster spawnProcess on Linux",
+	"license": "BSL-1.0",
+	"name": "procspawnfast"
+}

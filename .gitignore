@@ -1,0 +1,15 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/procspawnfast
+procspawnfast.so
+procspawnfast.dylib
+procspawnfast.dll
+procspawnfast.a
+procspawnfast.lib
+procspawnfast-test-*
+*.exe
+*.o
+*.obj
+*.lst
