@@ -623,3 +623,167 @@ private:
         this.owned = owned;
     }
 }
+
+
+/**
+Waits for the process associated with `pid` to terminate, and returns
+its exit status.
+
+In general one should always _wait for child processes to terminate
+before exiting the parent process unless the process was spawned as detached
+(that was spawned with `Config.detached` flag).
+Otherwise, they may become "$(HTTP en.wikipedia.org/wiki/Zombie_process,zombies)"
+– processes that are defunct, yet still occupy a slot in the OS process table.
+You should not and must not wait for detached processes, since you don't own them.
+
+If the process has already terminated, this function returns directly.
+The exit code is cached, so that if wait() is called multiple times on
+the same $(LREF Pid) it will always return the same value.
+
+POSIX_specific:
+If the process is terminated by a signal, this function returns a
+negative number whose absolute value is the signal number.
+Since POSIX restricts normal exit codes to the range 0-255, a
+negative return value will always indicate termination by signal.
+Signal codes are defined in the `core.sys.posix.signal` module
+(which corresponds to the `signal.h` POSIX header).
+
+Throws:
+$(LREF ProcessException) on failure or on attempt to wait for detached process.
+
+Example:
+See the $(LREF spawnProcess) documentation.
+
+See_also:
+$(LREF tryWait), for a non-blocking function.
+*/
+int wait(Pid pid) @safe
+{
+    assert(pid !is null, "Called wait on a null Pid.");
+    return pid.performWait(true);
+}
+
+
+@system unittest // Pid and wait()
+{
+    TestScript prog = "exit $1";
+    assert(wait(spawnProcessFast([prog.path, "0"])) == 0);
+    assert(wait(spawnProcessFast([prog.path, "123"])) == 123);
+    auto pid = spawnProcessFast([prog.path, "10"]);
+    assert(pid.processID > 0);
+    assert(pid.osHandle == pid.processID);
+    assert(wait(pid) == 10);
+    assert(wait(pid) == 10); // cached exit code
+    assert(pid.processID < 0);
+    assert(pid.osHandle < 0);
+}
+
+
+/**
+A non-blocking version of $(LREF wait).
+
+If the process associated with `pid` has already terminated,
+`tryWait` has the exact same effect as `wait`.
+In this case, it returns a tuple where the `terminated` field
+is set to `true` and the `status` field has the same
+interpretation as the return value of `wait`.
+
+If the process has $(I not) yet terminated, this function differs
+from `wait` in that does not wait for this to happen, but instead
+returns immediately.  The `terminated` field of the returned
+tuple will then be set to `false`, while the `status` field
+will always be 0 (zero).  `wait` or `tryWait` should then be
+called again on the same `Pid` at some later time; not only to
+get the exit code, but also to avoid the process becoming a "zombie"
+when it finally terminates.  (See $(LREF wait) for details).
+
+Returns:
+An $(D std.typecons.Tuple!(bool, "terminated", int, "status")).
+
+Throws:
+$(LREF ProcessException) on failure or on attempt to wait for detached process.
+
+Example:
+---
+auto pid = spawnProcess("dmd myapp.d");
+scope(exit) wait(pid);
+...
+auto dmd = tryWait(pid);
+if (dmd.terminated)
+{
+    if (dmd.status == 0) writeln("Compilation succeeded!");
+    else writeln("Compilation failed");
+}
+else writeln("Still compiling...");
+...
+---
+Note that in this example, the first `wait` call will have no
+effect if the process has already terminated by the time `tryWait`
+is called.  In the opposite case, however, the `scope` statement
+ensures that we always wait for the process if it hasn't terminated
+by the time we reach the end of the scope.
+*/
+auto tryWait(Pid pid) @safe
+{
+    import std.typecons : Tuple;
+    assert(pid !is null, "Called tryWait on a null Pid.");
+    auto code = pid.performWait(false);
+    return Tuple!(bool, "terminated", int, "status")(pid._processID == Pid.terminated, code);
+}
+
+@property string nativeShell() @safe @nogc pure nothrow
+{
+    return "/bin/sh";
+}
+
+// Unittest support code:  TestScript takes a string that contains a
+// shell script for the current platform, and writes it to a temporary
+// file. On Windows the file name gets a .cmd extension, while on
+// POSIX its executable permission bit is set.  The file is
+// automatically deleted when the object goes out of scope.
+version (unittest)
+private struct TestScript
+{
+    this(string code) @system
+    {
+        // @system due to chmod
+        import std.ascii : newline;
+        import std.file : write;
+
+        auto ext = "";
+        auto firstLine = "#!" ~ nativeShell;
+
+        path = uniqueTempPath()~ext;
+        write(path, firstLine ~ newline ~ code ~ newline);
+
+        import core.sys.posix.sys.stat : chmod;
+        import std.conv : octal;
+        chmod(path.tempCString(), octal!777);
+    }
+
+    ~this()
+    {
+        import std.file : remove, exists;
+        if (!path.empty && exists(path))
+        {
+            try { remove(path); }
+            catch (Exception e)
+            {
+                debug std.stdio.stderr.writeln(e.msg);
+            }
+        }
+    }
+
+    string path;
+}
+
+version (unittest)
+private string uniqueTempPath() @safe
+{
+    import std.file : tempDir;
+    import std.path : buildPath;
+    import std.uuid : randomUUID;
+    // Path should contain spaces to test escaping whitespace
+    return buildPath(tempDir(), "std.process temporary file " ~
+        randomUUID().toString());
+}
